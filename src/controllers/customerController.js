@@ -16,6 +16,13 @@ const addCustomer = async (req, res) => {
     if (!name || !mobile || !pricePerCan) {
       return res.status(400).json({ success: false, message: 'Name, mobile, and price are required.' });
     }
+    
+    // Check if vendor already has an active customer with this mobile number
+    const existingCustomer = await Customer.findOne({ vendorId: req.user.id, mobile, isActive: true });
+    if (existingCustomer) {
+      return res.status(400).json({ success: false, message: 'A customer with this mobile number already exists in your list.' });
+    }
+
     const customer = await Customer.create({ vendorId: req.user.id, name, mobile, address: address || '', pricePerCan });
     res.status(201).json({ success: true, customer });
   } catch (error) {
@@ -37,6 +44,21 @@ const getCustomer = async (req, res) => {
 
 const updateCustomer = async (req, res) => {
   try {
+    const { mobile } = req.body;
+    
+    // If mobile is being updated, verify it doesn't clash with another active customer
+    if (mobile) {
+      const existingCustomer = await Customer.findOne({ 
+        vendorId: req.user.id, 
+        mobile, 
+        isActive: true,
+        _id: { $ne: req.params.id } // exclude self
+      });
+      if (existingCustomer) {
+        return res.status(400).json({ success: false, message: 'A customer with this mobile number already exists in your list.' });
+      }
+    }
+
     const customer = await Customer.findOneAndUpdate(
       { _id: req.params.id, vendorId: req.user.id },
       req.body,
