@@ -73,7 +73,7 @@ const getBill = async (req, res) => {
     const previousDues = await Bill.find({
       vendorId: req.user.id,
       customerId: bill.customerId._id,
-      status: 'unpaid',
+      status: { $in: ['unpaid', 'partial'] },
       $or: [
         { year: { $lt: bill.year } },
         { year: bill.year, month: { $lt: bill.month } }
@@ -98,16 +98,38 @@ const getBill = async (req, res) => {
 
 const updateBillStatus = async (req, res) => {
   try {
-    const { status } = req.body;
-    if (!['paid', 'unpaid'].includes(status)) {
-      return res.status(400).json({ success: false, message: 'Status must be paid or unpaid.' });
-    }
-    const bill = await Bill.findOneAndUpdate(
-      { _id: req.params.id, vendorId: req.user.id },
-      { status },
-      { new: true }
-    ).populate('customerId', 'name mobile address pricePerCan');
+    const { paidAmount, status } = req.body;
+    
+    const bill = await Bill.findOne({ _id: req.params.id, vendorId: req.user.id });
     if (!bill) return res.status(404).json({ success: false, message: 'Bill not found.' });
+
+    if (paidAmount !== undefined) {
+      if (paidAmount < 0) return res.status(400).json({ success: false, message: 'Invalid paid amount.' });
+      
+      let newStatus = 'unpaid';
+      if (paidAmount >= bill.totalAmount) {
+        newStatus = 'paid';
+      } else if (paidAmount > 0) {
+        newStatus = 'partial';
+      }
+
+      bill.paidAmount = paidAmount;
+      bill.status = newStatus;
+      await bill.save();
+    } else if (status) {
+      // Fallback if older client sends status directly
+      if (!['paid', 'unpaid', 'partial'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid status.' });
+      }
+      bill.status = status;
+      if (status === 'paid') bill.paidAmount = bill.totalAmount;
+      else if (status === 'unpaid') bill.paidAmount = 0;
+      await bill.save();
+    } else {
+      return res.status(400).json({ success: false, message: 'No update parameters provided.' });
+    }
+
+    await bill.populate('customerId', 'name mobile address pricePerCan');
     res.json({ success: true, bill });
   } catch (error) {
     console.error('❌ UpdateBillStatus error:', error.message);

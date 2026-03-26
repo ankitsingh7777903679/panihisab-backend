@@ -8,7 +8,8 @@ const BillSchema = new mongoose.Schema(
     year:        { type: Number, required: true },
     totalCans:   { type: Number, required: true, default: 0 },
     totalAmount: { type: Number, required: true, default: 0 },
-    status:      { type: String, enum: ['paid', 'unpaid'], default: 'unpaid' },
+    paidAmount:  { type: Number, default: 0 },
+    status:      { type: String, enum: ['paid', 'unpaid', 'partial'], default: 'unpaid' },
     generatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }

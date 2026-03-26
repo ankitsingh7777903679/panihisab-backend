@@ -27,7 +27,8 @@ router.get('/:id', [
 // Update bill status
 router.patch('/:id', [
   param('id').isMongoId(),
-  body('status').isIn(['paid', 'unpaid']).withMessage('Status must be paid or unpaid'),
+  body('status').optional().isIn(['paid', 'unpaid', 'partial']).withMessage('Invalid status'),
+  body('paidAmount').optional().isNumeric().withMessage('Valid paid amount required'),
 ], validateRequest, updateBillStatus);
 
 module.exports = router;
