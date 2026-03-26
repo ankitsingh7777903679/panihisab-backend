@@ -25,7 +25,16 @@ const getAdminStats = async (req, res) => {
 const getAllVendors = async (req, res) => {
   try {
     const vendors = await User.find({ role: 'vendor' }).select('-password').sort({ createdAt: -1 });
-    res.json({ success: true, count: vendors.length, vendors });
+    
+    // Add customerCount to each vendor
+    const vendorsWithCount = await Promise.all(
+      vendors.map(async (vendor) => {
+        const customerCount = await Customer.countDocuments({ vendorId: vendor._id, isActive: true });
+        return { ...vendor.toObject(), customerCount };
+      })
+    );
+
+    res.json({ success: true, count: vendorsWithCount.length, vendors: vendorsWithCount });
   } catch (error) {
     console.error('❌ GetAllVendors error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch vendors.' });
@@ -36,10 +45,27 @@ const getVendorById = async (req, res) => {
   try {
     const vendor = await User.findById(req.params.id).select('-password');
     if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found.' });
-    const customers = await Customer.find({ vendorId: req.params.id, isActive: true });
-    const deliveries = await Delivery.find({ vendorId: req.params.id }).limit(10).sort({ createdAt: -1 });
-    const bills = await Bill.find({ vendorId: req.params.id });
-    res.json({ success: true, vendor, customers, deliveries, bills });
+    
+    // Calculate metrics
+    const customersCount = await Customer.countDocuments({ vendorId: req.params.id, isActive: true });
+    const deliveriesCount = await Delivery.countDocuments({ vendorId: req.params.id });
+    
+    const unpaidBills = await Bill.find({ vendorId: req.params.id, status: 'unpaid' });
+    const unpaidAmount = unpaidBills.reduce((sum, b) => sum + b.totalAmount, 0);
+    
+    const metrics = {
+      customersCount,
+      deliveriesCount,
+      unpaidAmount
+    };
+
+    // Get recent deliveries (for UI table)
+    const recentDeliveries = await Delivery.find({ vendorId: req.params.id })
+      .populate('customerId', 'name mobile')
+      .limit(10)
+      .sort({ date: -1 });
+
+    res.json({ success: true, vendor, metrics, recentDeliveries });
   } catch (error) {
     console.error('❌ GetVendorById error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch vendor details.' });
