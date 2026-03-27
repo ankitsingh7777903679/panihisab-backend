@@ -1,29 +1,35 @@
 const Delivery = require('../models/Delivery');
 
+// Helper: normalize any date to UTC midnight of that day (timezone-safe)
+const toMidnight = (d) => {
+  const dt = new Date(d);
+  return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate(), 0, 0, 0, 0));
+};
+
+// GET /api/deliveries?date=&month=&year=&customerId=
 const getDeliveries = async (req, res) => {
   try {
     const { date, month, year, customerId } = req.query;
     const filter = { vendorId: req.user.id };
-    
+
     if (date) {
-      const d = new Date(date);
-      filter.date = {
-        $gte: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0),
-        $lte: new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59),
-      };
+      const midnight = toMidnight(date);
+      filter.date = midnight;
     } else if (month && year) {
       const m = parseInt(month);
       const y = parseInt(year);
       filter.date = {
-        $gte: new Date(y, m - 1, 1, 0, 0, 0),
-        $lte: new Date(y, m, 0, 23, 59, 59)
+        $gte: new Date(Date.UTC(y, m - 1, 1)),
+        $lte: new Date(Date.UTC(y, m, 0, 23, 59, 59)),
       };
     }
-    
+
     if (customerId) filter.customerId = customerId;
+
     const deliveries = await Delivery.find(filter)
       .populate('customerId', 'name mobile address pricePerCan')
       .sort({ date: -1 });
+
     res.json({ success: true, count: deliveries.length, deliveries });
   } catch (error) {
     console.error('❌ GetDeliveries error:', error.message);
@@ -31,15 +37,15 @@ const getDeliveries = async (req, res) => {
   }
 };
 
+// GET /api/deliveries/today
 const getTodayDeliveries = async (req, res) => {
   try {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const end   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    const deliveries = await Delivery.find({ vendorId: req.user.id, date: { $gte: start, $lte: end } })
+    const midnight = toMidnight(new Date());
+    const deliveries = await Delivery.find({ vendorId: req.user.id, date: midnight })
       .populate('customerId', 'name mobile address pricePerCan')
-      .sort({ createdAt: -1 });
-    const totalCans = deliveries.reduce((sum, d) => sum + d.quantity, 0);
+      .sort({ 'entries.time': -1 });
+
+    const totalCans = deliveries.reduce((sum, d) => sum + d.totalQuantity, 0);
     res.json({ success: true, count: deliveries.length, totalCans, deliveries });
   } catch (error) {
     console.error('❌ GetTodayDeliveries error:', error.message);
@@ -47,80 +53,94 @@ const getTodayDeliveries = async (req, res) => {
   }
 };
 
+// POST /api/deliveries — add a new entry to the day's document (creates doc if first entry)
 const addDelivery = async (req, res) => {
   try {
     const { customerId, quantity, date } = req.body;
     if (!customerId || !quantity) {
       return res.status(400).json({ success: false, message: 'Customer and quantity are required.' });
     }
-    
-    // Normalize date to remove time component
-    const deliveryDate = date ? new Date(date) : new Date();
-    const normalizedDate = new Date(deliveryDate.getFullYear(), deliveryDate.getMonth(), deliveryDate.getDate(), 0, 0, 0);
-    
-    // Check if entry exists for same customer on same date
-    const existingDelivery = await Delivery.findOne({
-      vendorId: req.user.id,
-      customerId,
-      date: {
-        $gte: normalizedDate,
-        $lte: new Date(normalizedDate.getTime() + 86400000 - 1) // Same day
-      }
-    });
-    
-    let delivery;
-    if (existingDelivery) {
-      // Update existing entry - increment quantity
-      existingDelivery.quantity += parseInt(quantity);
-      delivery = await existingDelivery.save();
-    } else {
-      // Create new entry
-      delivery = await Delivery.create({
-        vendorId: req.user.id,
-        customerId,
-        quantity,
-        date: normalizedDate,
-      });
-    }
-    
-    const populated = await delivery.populate('customerId', 'name mobile address pricePerCan');
-    res.status(existingDelivery ? 200 : 201).json({ success: true, delivery: populated, merged: !!existingDelivery });
+
+    const midnight = toMidnight(date ? new Date(date) : new Date());
+    const qty = parseInt(quantity);
+    const newEntry = { quantity: qty, time: new Date() };
+
+    // Upsert: find the one doc for this customer+date, push the new entry, add to total
+    const delivery = await Delivery.findOneAndUpdate(
+      { vendorId: req.user.id, customerId, date: midnight },
+      {
+        $push: { entries: newEntry },
+        $inc:  { totalQuantity: qty },
+      },
+      { upsert: true, new: true, returnDocument: 'after' }
+    ).populate('customerId', 'name mobile address pricePerCan');
+
+    res.status(201).json({ success: true, delivery });
   } catch (error) {
     console.error('❌ AddDelivery error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to add delivery.' });
   }
 };
 
-const deleteDelivery = async (req, res) => {
+// DELETE /api/deliveries/:docId/entries/:entryId — remove one entry from a day-doc
+const deleteEntry = async (req, res) => {
   try {
-    const delivery = await Delivery.findOneAndDelete({ _id: req.params.id, vendorId: req.user.id });
-    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found.' });
-    res.json({ success: true, message: 'Delivery deleted.' });
+    const { docId, entryId } = req.params;
+
+    // Find the doc first to get the entry's quantity (so we can decrement totalQuantity)
+    const doc = await Delivery.findOne({ _id: docId, vendorId: req.user.id });
+    if (!doc) return res.status(404).json({ success: false, message: 'Delivery not found.' });
+
+    const entry = doc.entries.id(entryId);
+    if (!entry) return res.status(404).json({ success: false, message: 'Entry not found.' });
+
+    const entryQty = entry.quantity;
+
+    // If this was the only entry, delete the whole document
+    if (doc.entries.length === 1) {
+      await Delivery.deleteOne({ _id: docId });
+      return res.json({ success: true, deleted: true, message: 'Delivery record removed.' });
+    }
+
+    // Otherwise just remove this entry and update the total
+    await Delivery.findByIdAndUpdate(docId, {
+      $pull: { entries: { _id: entryId } },
+      $inc:  { totalQuantity: -entryQty },
+    });
+
+    res.json({ success: true, deleted: false, message: 'Entry deleted.' });
   } catch (error) {
-    console.error('❌ DeleteDelivery error:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to delete delivery.' });
+    console.error('❌ DeleteEntry error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to delete entry.' });
   }
 };
 
-const updateDelivery = async (req, res) => {
+// PUT /api/deliveries/:docId/entries/:entryId — update quantity of one entry
+const updateEntry = async (req, res) => {
   try {
+    const { docId, entryId } = req.params;
     const { quantity } = req.body;
     if (!quantity || quantity < 1) {
       return res.status(400).json({ success: false, message: 'Quantity must be at least 1.' });
     }
-    
-    const delivery = await Delivery.findOneAndUpdate(
-      { _id: req.params.id, vendorId: req.user.id },
-      { quantity: parseInt(quantity) },
-      { new: true }
-    ).populate('customerId', 'name mobile address pricePerCan');
-    
-    if (!delivery) return res.status(404).json({ success: false, message: 'Delivery not found.' });
-    res.json({ success: true, delivery });
+
+    const doc = await Delivery.findOne({ _id: docId, vendorId: req.user.id });
+    if (!doc) return res.status(404).json({ success: false, message: 'Delivery not found.' });
+
+    const entry = doc.entries.id(entryId);
+    if (!entry) return res.status(404).json({ success: false, message: 'Entry not found.' });
+
+    const diff = parseInt(quantity) - entry.quantity;
+    entry.quantity = parseInt(quantity);
+    doc.totalQuantity += diff;
+    await doc.save();
+
+    await doc.populate('customerId', 'name mobile address pricePerCan');
+    res.json({ success: true, delivery: doc });
   } catch (error) {
-    console.error('❌ UpdateDelivery error:', error.message);
-    res.status(500).json({ success: false, message: 'Failed to update delivery.' });
+    console.error('❌ UpdateEntry error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to update entry.' });
   }
 };
 
-module.exports = { getDeliveries, getTodayDeliveries, addDelivery, deleteDelivery, updateDelivery };
+module.exports = { getDeliveries, getTodayDeliveries, addDelivery, deleteEntry, updateEntry };

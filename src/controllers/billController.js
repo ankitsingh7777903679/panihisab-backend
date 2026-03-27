@@ -30,8 +30,9 @@ const generateBills = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No active customers found.' });
     }
 
-    const startDate = new Date(year, month - 1, 1);
-    const endDate   = new Date(year, month, 0, 23, 59, 59);
+    // Use UTC to be timezone-safe across all server environments
+    const startDate = new Date(Date.UTC(parseInt(year), parseInt(month) - 1, 1, 0, 0, 0));
+    const endDate   = new Date(Date.UTC(parseInt(year), parseInt(month),   0, 23, 59, 59));
 
     const bills = [];
     for (const customer of customers) {
@@ -40,14 +41,19 @@ const generateBills = async (req, res) => {
         customerId: customer._id,
         date: { $gte: startDate, $lte: endDate },
       });
-      const totalCans = deliveries.reduce((sum, d) => sum + d.quantity, 0);
-      if (totalCans === 0) continue;
+      // NEW schema: each day-doc has totalQuantity (sum of all entries for that day)
+      const totalCans = deliveries.reduce((sum, d) => sum + (d.totalQuantity || 0), 0);
+      // If customer has 0 cans this month, delete any stale bill so UI shows nothing
+      if (totalCans === 0) {
+        await Bill.deleteOne({ vendorId: req.user.id, customerId: customer._id, month: parseInt(month), year: parseInt(year) });
+        continue;
+      }
       const totalAmount = totalCans * customer.pricePerCan;
 
       const bill = await Bill.findOneAndUpdate(
         { vendorId: req.user.id, customerId: customer._id, month: parseInt(month), year: parseInt(year) },
         { totalCans, totalAmount, generatedAt: new Date() },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
       bills.push(bill);
     }
@@ -80,9 +86,9 @@ const getBill = async (req, res) => {
       ]
     }).sort({ year: 1, month: 1 });
 
-    // Fetch all deliveries for this month to render the calendar grid
-    const startDate = new Date(bill.year, bill.month - 1, 1);
-    const endDate = new Date(bill.year, bill.month, 0, 23, 59, 59);
+    // Fetch all deliveries for this month to render the calendar grid (UTC-safe range)
+    const startDate = new Date(Date.UTC(bill.year, bill.month - 1, 1, 0, 0, 0));
+    const endDate   = new Date(Date.UTC(bill.year, bill.month,     0, 23, 59, 59));
     const deliveries = await Delivery.find({
       vendorId: req.user.id,
       customerId: bill.customerId._id,

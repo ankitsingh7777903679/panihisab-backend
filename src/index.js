@@ -8,15 +8,30 @@ connectDB();
 
 const app = express();
 
-const generalLimiter = require('express-rate-limit')({
+const rateLimit = require('express-rate-limit');
+
+// General API limiter — 500 requests per 15 min per IP (generous for single-vendor use)
+const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 500,
   standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again in a few minutes.' },
+  skip: (req) => req.path === '/api/health', // never limit health checks
+});
+
+// Strict limiter only for auth routes (prevent brute force)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many login attempts, please try again later.' },
 });
 
 // CORS Configuration
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : [];
-  
+
 
 app.use(cors({
   origin: allowedOrigins,

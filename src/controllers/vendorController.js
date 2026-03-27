@@ -32,10 +32,12 @@ const getDashboard = async (req, res) => {
   try {
     const vendorId = req.user.id;
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-    const todayEnd   = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-    const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+    // Use UTC dates to match how delivery dates are stored (UTC midnight)
+    const todayUTC     = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const todayStart   = todayUTC;
+    const todayEnd     = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59));
+    const monthStart   = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const monthEnd     = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59));
 
     const [totalCustomers, todayDeliveries, monthlyBills, pendingBills] = await Promise.all([
       Customer.countDocuments({ vendorId, isActive: true }),
@@ -45,7 +47,8 @@ const getDashboard = async (req, res) => {
       Bill.find({ vendorId, status: 'unpaid' }),
     ]);
 
-    const todayCans = todayDeliveries.reduce((sum, d) => sum + d.quantity, 0);
+    // NEW schema: each delivery day-doc has totalQuantity (sum of all entries)
+    const todayCans = todayDeliveries.reduce((sum, d) => sum + (d.totalQuantity || 0), 0);
     const monthlyEarnings = monthlyBills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.totalAmount, 0);
     const pendingAmount   = pendingBills.reduce((sum, b) => sum + b.totalAmount, 0);
 
