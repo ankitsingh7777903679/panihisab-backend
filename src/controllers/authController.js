@@ -4,6 +4,30 @@ const User = require('../models/User');
 const generateToken = (id, role) =>
   jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
 
+// Helper to format user response with subscription details
+const formatUserResponse = (user) => {
+  const subDetails = user.getSubscriptionDetails();
+  return {
+    id: user._id,
+    name: user.name,
+    mobile: user.mobile,
+    email: user.email,
+    businessName: user.businessName,
+    logoUrl: user.logoUrl,
+    role: user.role,
+    isActive: user.isActive,
+    subscription: {
+      status: subDetails.status,
+      plan: subDetails.plan,
+      isActive: subDetails.isActive,
+      daysLeft: subDetails.daysLeft,
+      endDate: subDetails.endDate,
+      isExpiringSoon: subDetails.isExpiringSoon,
+      message: subDetails.message,
+    },
+  };
+};
+
 // POST /api/auth/register
 const register = async (req, res) => {
   try {
@@ -19,7 +43,7 @@ const register = async (req, res) => {
     res.status(201).json({
       success: true,
       token: generateToken(user._id, user.role),
-      user: { id: user._id, name: user.name, mobile: user.mobile, businessName: user.businessName, role: user.role },
+      user: formatUserResponse(user),
     });
   } catch (error) {
     console.error('❌ Register error:', error.message);
@@ -44,12 +68,12 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
     }
     if (!user.isActive) {
-      return res.status(403).json({ success: false, message: 'Account suspended. Contact admin.' });
+      return res.status(403).json({ success: false, code: 'ACCOUNT_SUSPENDED', message: 'Account suspended. Contact admin.' });
     }
     res.json({
       success: true,
       token: generateToken(user._id, user.role),
-      user: { id: user._id, name: user.name, mobile: user.mobile, email: user.email, businessName: user.businessName, logoUrl: user.logoUrl, role: user.role },
+      user: formatUserResponse(user),
     });
   } catch (error) {
     console.error('❌ Login error:', error.message);
@@ -61,11 +85,40 @@ const login = async (req, res) => {
 const getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
-    res.json({ success: true, user });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    res.json({ success: true, user: formatUserResponse(user) });
   } catch (error) {
     console.error('❌ GetMe error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch profile.' });
   }
 };
 
-module.exports = { register, login, getMe };
+// GET /api/auth/subscription-status (NEW - detailed subscription check)
+const getSubscriptionStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select(
+      'subscriptionStatus plan trialEndsAt subscriptionEndsAt isActive role'
+    );
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+
+    const subDetails = user.getSubscriptionDetails();
+    res.json({
+      success: true,
+      subscription: subDetails,
+      canPerformWrites: user.hasActiveSubscription(),
+      warnings: {
+        isTrialExpiringSoon: user.isTrialExpiringSoon(),
+        isSubscriptionExpiringSoon: user.isSubscriptionExpiringSoon(),
+      },
+    });
+  } catch (error) {
+    console.error('❌ GetSubscriptionStatus error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch subscription status.' });
+  }
+};
+
+module.exports = { register, login, getMe, getSubscriptionStatus };

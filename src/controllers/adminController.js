@@ -131,4 +131,94 @@ const getAllBills = async (req, res) => {
   }
 };
 
-module.exports = { getAdminStats, getAllVendors, getVendorById, toggleVendorStatus, deleteVendor, getAllCustomers, getAllDeliveries, getAllBills };
+/**
+ * PATCH /api/admin/vendors/:id/subscription
+ * Admin manually kisi vendor ki subscription activate/extend kar sakta hai.
+ * Body: { days: 30, status: 'active' }  (optional — default 30 days active)
+ */
+const manuallyExtendSubscription = async (req, res) => {
+  try {
+    const vendor = await User.findById(req.params.id);
+    if (!vendor || vendor.role !== 'vendor') {
+      return res.status(404).json({ success: false, message: 'Vendor not found.' });
+    }
+
+    const days = parseInt(req.body.days) || 30;
+    const status = req.body.status || 'active';
+
+    const now = new Date();
+    // Agar pehle se active hai to usi end date se aage badhao
+    const baseDate =
+      vendor.subscriptionStatus === 'active' && vendor.subscriptionEndsAt > now
+        ? vendor.subscriptionEndsAt
+        : now;
+
+    const newEndDate = new Date(baseDate);
+    newEndDate.setDate(newEndDate.getDate() + days);
+
+    vendor.subscriptionStatus = status;
+    vendor.subscriptionStartsAt = vendor.subscriptionStartsAt || now;
+    vendor.subscriptionEndsAt = newEndDate;
+    vendor.plan = 'monthly';
+    await vendor.save();
+
+    res.json({
+      success: true,
+      message: `Vendor ki subscription ${days} din ke liye extend kar di gayi. Nai end date: ${newEndDate.toDateString()}`,
+      vendor: {
+        id: vendor._id,
+        name: vendor.name,
+        subscriptionStatus: vendor.subscriptionStatus,
+        subscriptionEndsAt: vendor.subscriptionEndsAt,
+      },
+    });
+  } catch (error) {
+    console.error('\u274C manuallyExtendSubscription error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to update subscription.' });
+  }
+};
+
+/**
+ * GET /api/admin/subscription-stats
+ * Admin ke liye quick overview: kitne trial, active, expired vendors hain.
+ */
+const getSubscriptionStats = async (req, res) => {
+  try {
+    const now = new Date();
+    const [trialCount, activeCount, expiredCount, canceledCount] = await Promise.all([
+      User.countDocuments({ role: 'vendor', subscriptionStatus: 'trial', trialEndsAt: { $gt: now } }),
+      User.countDocuments({ role: 'vendor', subscriptionStatus: 'active', subscriptionEndsAt: { $gt: now } }),
+      User.countDocuments({
+        role: 'vendor',
+        $or: [
+          { subscriptionStatus: 'expired' },
+          { subscriptionStatus: 'trial', trialEndsAt: { $lte: now } },
+          { subscriptionStatus: 'active', subscriptionEndsAt: { $lte: now } },
+        ],
+      }),
+      User.countDocuments({ role: 'vendor', subscriptionStatus: 'canceled' }),
+    ]);
+
+    // Vendors whose trial/subscription expires in next 7 days
+    const sevenDaysLater = new Date(now);
+    sevenDaysLater.setDate(sevenDaysLater.getDate() + 7);
+    const expiringSoon = await User.find({
+      role: 'vendor',
+      $or: [
+        { subscriptionStatus: 'trial', trialEndsAt: { $gt: now, $lte: sevenDaysLater } },
+        { subscriptionStatus: 'active', subscriptionEndsAt: { $gt: now, $lte: sevenDaysLater } },
+      ],
+    }).select('name mobile businessName subscriptionStatus trialEndsAt subscriptionEndsAt');
+
+    res.json({
+      success: true,
+      stats: { trialCount, activeCount, expiredCount, canceledCount },
+      expiringSoon,
+    });
+  } catch (error) {
+    console.error('❌ getSubscriptionStats error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to fetch subscription stats.' });
+  }
+};
+
+module.exports = { getAdminStats, getAllVendors, getVendorById, toggleVendorStatus, deleteVendor, getAllCustomers, getAllDeliveries, getAllBills, manuallyExtendSubscription, getSubscriptionStats };

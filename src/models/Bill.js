@@ -11,6 +11,9 @@ const BillSchema = new mongoose.Schema(
     paidAmount:  { type: Number, default: 0 },
     status:      { type: String, enum: ['paid', 'unpaid', 'partial'], default: 'unpaid' },
     generatedAt: { type: Date, default: Date.now },
+    sentViaWhatsApp: { type: Boolean, default: false },
+    sentAt:      { type: Date, default: null },
+    sentCount:   { type: Number, default: 0 },  // Track resends
   },
   { timestamps: true }
 );

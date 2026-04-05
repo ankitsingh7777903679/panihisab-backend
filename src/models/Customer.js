@@ -8,6 +8,10 @@ const CustomerSchema = new mongoose.Schema(
     address:     { type: String, default: '', trim: true },
     pricePerCan: { type: Number, required: true, min: 0 },
     isActive:    { type: Boolean, default: true },
+    // Opening balance — customer ka purana hisab (before using the app)
+    openingBalance:     { type: Number, default: 0, min: 0 },  // Total bakaya before app
+    previousPaid:       { type: Number, default: 0, min: 0 },  // Kitna already paid tha
+    openingBalanceNote: { type: String, default: '', trim: true }, // Optional note
   },
   { timestamps: true }
 );

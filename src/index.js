@@ -38,6 +38,10 @@ app.use(cors({
   credentials: true,
 }));
 
+// IMPORTANT: Razorpay webhook ke liye raw body chahiye — PEHLE yeh route register karo
+// express.json() se pehle, warna body parse ho jaayegi aur signature verify nahi hogi
+app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));  // 10mb for base64 logo uploads
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -50,6 +54,7 @@ app.use('/api/deliveries', require('./routes/deliveries'));
 app.use('/api/bills', require('./routes/bills'));
 app.use('/api/vendor', require('./routes/vendor'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/payments', require('./routes/payments'));
 
 // Health check
 app.get('/api/health', (req, res) => {
