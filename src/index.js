@@ -2,13 +2,14 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const rateLimit = require('express-rate-limit');
+
+const { startReminderCron } = require('./jobs/reminderCron');
 
 // Connect DB
 connectDB();
 
 const app = express();
-
-const rateLimit = require('express-rate-limit');
 
 // General API limiter — 500 requests per 15 min per IP (generous for single-vendor use)
 const generalLimiter = rateLimit({
@@ -55,6 +56,7 @@ app.use('/api/bills', require('./routes/bills'));
 app.use('/api/vendor', require('./routes/vendor'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/contact', require('./routes/contact'));
 
 // Health check
 app.get('/api/health', (req, res) => {
@@ -77,4 +79,7 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 PaniHisab Backend running on http://localhost:${PORT}`);
+  
+  // Start reminder cron job
+  startReminderCron();
 });

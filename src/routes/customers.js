@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { body, param } = require('express-validator');
+const { body, param, query } = require('express-validator');
 const { getCustomers, getDeletedCustomers, addCustomer, getCustomer, updateCustomer, deleteCustomer, restoreCustomer, setOpeningBalance, deleteOpeningBalance } = require('../controllers/customerController');
 const { protect, validateRequest } = require('../middleware/auth');
 const { checkSubscription } = require('../middleware/checkSubscription');
@@ -17,7 +17,11 @@ router.post('/', checkSubscription, [
 
 // Get all or single
 router.get('/deleted', getDeletedCustomers);
-router.get('/', getCustomers);
+router.get('/', [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1 and 1000'),
+  query('search').optional().isString().trim(),
+], validateRequest, getCustomers);
 router.get('/:id', [
   param('id').isMongoId().withMessage('Invalid customer ID'),
 ], validateRequest, getCustomer);

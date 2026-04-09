@@ -15,6 +15,8 @@ router.post('/generate', checkSubscription, [
 
 // Get bills with filters
 router.get('/', [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1 and 1000'),
   query('month').optional().isInt({ min: 1, max: 12 }),
   query('year').optional().isInt({ min: 2000 }),
   query('customerId').optional().isMongoId(),
@@ -31,6 +33,10 @@ router.patch('/:id', checkSubscription, [
   body('status').optional().isIn(['paid', 'unpaid', 'partial']).withMessage('Invalid status'),
   body('paidAmount').optional().isNumeric().withMessage('Valid paid amount required'),
   body('previousBalancePaid').optional().isNumeric().withMessage('Valid previous balance amount required'),
+  body('previousBillsPaid').optional().isNumeric().withMessage('Valid previous bill dues amount required'),
+  body('previousBillsAllocations').optional().isArray().withMessage('Valid previous bill allocation list required'),
+  body('previousBillsAllocations.*.billId').optional().isMongoId().withMessage('Valid previous bill id required'),
+  body('previousBillsAllocations.*.amount').optional().isNumeric().withMessage('Valid previous bill allocation amount required'),
 ], validateRequest, updateBillStatus);
 
 // ✅ NEW: Mark bill as sent via WhatsApp

@@ -115,7 +115,13 @@ const razorpayWebhook = async (req, res) => {
 
       // Subscription dates calculate karo
       const now = new Date();
-      const subscriptionEnd = new Date(now);
+      let subscriptionEnd = new Date(now);
+      
+      // If user is in extra period, add 30 days from extra period end
+      const user = await User.findById(userId);
+      if (user && user.subscriptionStatus === 'extra' && user.extraDaysEndsAt) {
+        subscriptionEnd = new Date(user.extraDaysEndsAt);
+      }
       subscriptionEnd.setDate(subscriptionEnd.getDate() + SUBSCRIPTION_DAYS);
 
       // User ka subscription activate karo
@@ -153,11 +159,15 @@ const getSubscriptionStatus = async (req, res) => {
     }
 
     const now = new Date();
-    const isActive = user.hasActiveSubscription();
+    const isActive = await user.hasActiveSubscription();
 
     let daysLeft = 0;
+    let extraDaysLeft = 0;
     if (user.subscriptionStatus === 'trial' && user.trialEndsAt) {
       daysLeft = Math.max(0, Math.ceil((user.trialEndsAt - now) / (1000 * 60 * 60 * 24)));
+    } else if (user.subscriptionStatus === 'extra' && user.extraDaysEndsAt) {
+      extraDaysLeft = Math.max(0, Math.ceil((user.extraDaysEndsAt - now) / (1000 * 60 * 60 * 24)));
+      daysLeft = extraDaysLeft;
     } else if (user.subscriptionStatus === 'active' && user.subscriptionEndsAt) {
       daysLeft = Math.max(0, Math.ceil((user.subscriptionEndsAt - now) / (1000 * 60 * 60 * 24)));
     }
@@ -173,10 +183,13 @@ const getSubscriptionStatus = async (req, res) => {
         plan: user.plan,
         isActive,
         daysLeft,
+        extraDaysLeft,
         trialEndsAt: user.trialEndsAt,
+        extraDaysEndsAt: user.extraDaysEndsAt,
         subscriptionEndsAt: user.subscriptionEndsAt,
         priceMonthly: priceRupees,
-        customerCount: customerCount
+        customerCount: customerCount,
+        showExtraReminder: user.subscriptionStatus === 'extra' && extraDaysLeft > 0 && extraDaysLeft <= 5,
       },
     });
   } catch (error) {

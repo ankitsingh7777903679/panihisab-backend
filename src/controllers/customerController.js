@@ -2,8 +2,40 @@ const Customer = require('../models/Customer');
 
 const getCustomers = async (req, res) => {
   try {
-    const customers = await Customer.find({ vendorId: req.user.id, isActive: true }).sort({ createdAt: -1 });
-    res.json({ success: true, count: customers.length, customers });
+    const { page = 1, limit = 30, search } = req.query;
+    const parsedPage = Number.parseInt(page, 10);
+    const parsedLimit = Number.parseInt(limit, 10);
+    const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 30;
+    const skip = (safePage - 1) * safeLimit;
+    
+    // Build filter
+    const filter = { vendorId: req.user.id, isActive: true };
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { mobile: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Get total count for pagination
+    const total = await Customer.countDocuments(filter);
+    
+    // Get paginated customers
+    const customers = await Customer.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(safeLimit);
+    
+    res.json({ 
+      success: true, 
+      count: customers.length,
+      total,
+      page: safePage,
+      pages: Math.max(1, Math.ceil(total / safeLimit)),
+      limit: safeLimit,
+      customers 
+    });
   } catch (error) {
     console.error('❌ GetCustomers error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch customers.' });

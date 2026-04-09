@@ -33,12 +33,12 @@ const checkSubscription = async (req, res, next) => {
     }
 
     // Check if subscription is active
-    if (user.hasActiveSubscription()) {
+    if (await user.hasActiveSubscription()) {
       return next(); // Active/Trial hai — allow
     }
 
     // Subscription expired ya canceled - provide detailed info
-    const subDetails = user.getSubscriptionDetails();
+    const subDetails = await user.getSubscriptionDetails();
     console.warn(`⚠️  Write attempt by user with expired subscription: ${req.user.id} (status: ${user.subscriptionStatus})`);
     
     return res.status(403).json({

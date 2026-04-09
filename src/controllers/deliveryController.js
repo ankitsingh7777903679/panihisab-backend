@@ -6,11 +6,16 @@ const toMidnight = (d) => {
   return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate(), 0, 0, 0, 0));
 };
 
-// GET /api/deliveries?date=&month=&year=&customerId=
+// GET /api/deliveries?date=&month=&year=&customerId=&page=&limit=
 const getDeliveries = async (req, res) => {
   try {
-    const { date, month, year, customerId } = req.query;
+    const { date, month, year, customerId, page = 1, limit = 20 } = req.query;
     const filter = { vendorId: req.user.id };
+    const parsedPage = Number.parseInt(page, 10);
+    const parsedLimit = Number.parseInt(limit, 10);
+    const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
+    const skip = (safePage - 1) * safeLimit;
 
     if (date) {
       const midnight = toMidnight(date);
@@ -26,11 +31,23 @@ const getDeliveries = async (req, res) => {
 
     if (customerId) filter.customerId = customerId;
 
+    const total = await Delivery.countDocuments(filter);
+
     const deliveries = await Delivery.find(filter)
       .populate('customerId', 'name mobile address pricePerCan')
-      .sort({ date: -1 });
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(safeLimit);
 
-    res.json({ success: true, count: deliveries.length, deliveries });
+    res.json({
+      success: true,
+      count: deliveries.length,
+      total,
+      page: safePage,
+      pages: Math.max(1, Math.ceil(total / safeLimit)),
+      limit: safeLimit,
+      deliveries,
+    });
   } catch (error) {
     console.error('❌ GetDeliveries error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch deliveries.' });
@@ -143,4 +160,69 @@ const updateEntry = async (req, res) => {
   }
 };
 
-module.exports = { getDeliveries, getTodayDeliveries, addDelivery, deleteEntry, updateEntry };
+// POST /api/deliveries/batch — process multiple adds/deletes in one request
+const batchDeliveries = async (req, res) => {
+  try {
+    const { date, changes } = req.body;
+    const vendorId = req.user.id;
+    const midnight = toMidnight(date ? new Date(date) : new Date());
+    
+    const results = { added: 0, deleted: 0, errors: [] };
+    
+    // Process all changes
+    for (const change of changes) {
+      try {
+        if (change.type === 'add') {
+          const { customerId, quantity } = change;
+          const qty = parseInt(quantity);
+          const newEntry = { quantity: qty, time: new Date() };
+          
+          // Upsert: find the one doc for this customer+date, push the new entry
+          await Delivery.findOneAndUpdate(
+            { vendorId, customerId, date: midnight },
+            {
+              $push: { entries: newEntry },
+              $inc: { totalQuantity: qty },
+            },
+            { upsert: true, new: true }
+          );
+          results.added++;
+          
+        } else if (change.type === 'delete') {
+          const { docId, entryId } = change;
+          
+          // Find the document
+          const doc = await Delivery.findOne({ _id: docId, vendorId });
+          if (!doc) continue;
+          
+          // Find the entry to get its quantity
+          const entry = doc.entries.find(e => e._id.toString() === entryId);
+          if (!entry) continue;
+          
+          // Pull the entry and decrement total
+          await Delivery.findOneAndUpdate(
+            { _id: docId, vendorId },
+            {
+              $pull: { entries: { _id: entryId } },
+              $inc: { totalQuantity: -entry.quantity },
+            }
+          );
+          results.deleted++;
+        }
+      } catch (err) {
+        results.errors.push({ change, error: err.message });
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Batch processed: ${results.added} added, ${results.deleted} deleted`,
+      results 
+    });
+  } catch (error) {
+    console.error('❌ BatchDeliveries error:', error.message);
+    res.status(500).json({ success: false, message: 'Failed to process batch.' });
+  }
+};
+
+module.exports = { getDeliveries, getTodayDeliveries, addDelivery, deleteEntry, updateEntry, batchDeliveries };

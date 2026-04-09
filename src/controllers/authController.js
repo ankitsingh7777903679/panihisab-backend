@@ -99,20 +99,23 @@ const getMe = async (req, res) => {
 const getSubscriptionStatus = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select(
-      'subscriptionStatus plan trialEndsAt subscriptionEndsAt isActive role'
+      'subscriptionStatus plan trialEndsAt extraDaysEndsAt subscriptionEndsAt isActive role trialStartsAt'
     );
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
-    const subDetails = user.getSubscriptionDetails();
+    const subDetails = await user.getSubscriptionDetails();
+    const canPerformWrites = await user.hasActiveSubscription();
+    
     res.json({
       success: true,
       subscription: subDetails,
-      canPerformWrites: user.hasActiveSubscription(),
+      canPerformWrites,
       warnings: {
         isTrialExpiringSoon: user.isTrialExpiringSoon(),
         isSubscriptionExpiringSoon: user.isSubscriptionExpiringSoon(),
+        isExtraPeriodExpiringSoon: user.isExtraPeriodExpiringSoon ? user.isExtraPeriodExpiringSoon() : false,
       },
     });
   } catch (error) {
