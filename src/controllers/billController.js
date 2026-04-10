@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 
 const getBills = async (req, res) => {
   try {
-    const { month, year, customerId, page = 1, limit = 30 } = req.query;
+    const { month, year, customerId, search, page = 1, limit = 30 } = req.query;
     const parsedPage = Number.parseInt(page, 10);
     const parsedLimit = Number.parseInt(limit, 10);
     const safePage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
@@ -16,6 +16,35 @@ const getBills = async (req, res) => {
     if (month) filter.month = parseInt(month);
     if (year)  filter.year  = parseInt(year);
     if (customerId) filter.customerId = customerId;
+    
+    // If search term provided, find matching customers first
+    let customerFilter = null;
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), 'i');
+      const matchingCustomers = await Customer.find({
+        vendorId: req.user.id,
+        $or: [
+          { name: searchRegex },
+          { mobile: searchRegex }
+        ]
+      }).select('_id').lean();
+      
+      const customerIds = matchingCustomers.map(c => c._id.toString());
+      if (customerIds.length > 0) {
+        filter.customerId = { $in: customerIds };
+      } else {
+        // No matching customers, return empty result
+        return res.json({
+          success: true,
+          count: 0,
+          total: 0,
+          page: safePage,
+          pages: 0,
+          limit: safeLimit,
+          bills: []
+        });
+      }
+    }
     
     // Get total count for pagination
     const total = await Bill.countDocuments(filter);

@@ -191,23 +191,29 @@ const batchDeliveries = async (req, res) => {
         } else if (change.type === 'delete') {
           const { docId, entryId } = change;
           
-          // Find the document
+          // Find the document and entry atomically
           const doc = await Delivery.findOne({ _id: docId, vendorId });
           if (!doc) continue;
           
           // Find the entry to get its quantity
           const entry = doc.entries.find(e => e._id.toString() === entryId);
-          if (!entry) continue;
+          if (!entry) continue; // Entry already deleted, skip
           
-          // Pull the entry and decrement total
-          await Delivery.findOneAndUpdate(
-            { _id: docId, vendorId },
+          // Atomically pull the entry AND decrement total in one operation
+          // Include entryId in query to ensure we only update if entry still exists
+          const result = await Delivery.findOneAndUpdate(
+            { _id: docId, vendorId, 'entries._id': entryId },
             {
               $pull: { entries: { _id: entryId } },
               $inc: { totalQuantity: -entry.quantity },
-            }
+            },
+            { new: true }
           );
-          results.deleted++;
+          
+          // Only count if actually modified (prevent double-decrement on race conditions)
+          if (result) {
+            results.deleted++;
+          }
         }
       } catch (err) {
         results.errors.push({ change, error: err.message });
