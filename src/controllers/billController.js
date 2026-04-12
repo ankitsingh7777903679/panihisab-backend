@@ -115,6 +115,53 @@ const getBills = async (req, res) => {
       };
     });
     
+    // Calculate monthly totals from ALL bills for this month (not just paginated)
+    const allMonthBills = await Bill.find({
+      vendorId: req.user.id,
+      month: month ? parseInt(month) : new Date().getMonth() + 1,
+      year: year ? parseInt(year) : new Date().getFullYear()
+    }).populate('customerId', 'openingBalance previousPaid pricePerCan').lean();
+    
+    // Get all customers with previous dues for this month
+    const allCustomerIds = [...new Set(allMonthBills.map(b => b.customerId?._id).filter(Boolean))];
+    const allPreviousDues = await Bill.find({
+      vendorId: req.user.id,
+      customerId: { $in: allCustomerIds },
+      status: { $in: ['unpaid', 'partial'] },
+      $or: [
+        { year: { $lt: (year ? parseInt(year) : new Date().getFullYear()) } },
+        { year: (year ? parseInt(year) : new Date().getFullYear()), month: { $lt: (month ? parseInt(month) : new Date().getMonth() + 1) } }
+      ]
+    }).select('customerId totalAmount paidAmount').lean();
+    
+    // Calculate previous dues by customer
+    const previousDuesMap = {};
+    allPreviousDues.forEach(due => {
+      const custId = due.customerId?.toString();
+      if (custId) {
+        previousDuesMap[custId] = (previousDuesMap[custId] || 0) + Math.max(0, (due.totalAmount || 0) - (due.paidAmount || 0));
+      }
+    });
+    
+    let totalRevenue = 0;
+    let totalCollected = 0;
+    let totalPendingAll = 0;
+    
+    allMonthBills.forEach(b => {
+      const revenue = b.totalAmount || 0;
+      const collected = b.paidAmount || 0;
+      const currentPending = Math.max(0, revenue - collected);
+      const custId = b.customerId?._id?.toString();
+      const openingBalance = b.customerId?.openingBalance || 0;
+      const previousPaid = b.customerId?.previousPaid || 0;
+      const openingBalancePending = Math.max(0, openingBalance - previousPaid);
+      const previousBillsPending = previousDuesMap[custId] || 0;
+      
+      totalRevenue += revenue;
+      totalCollected += collected;
+      totalPendingAll += currentPending + previousBillsPending + openingBalancePending;
+    });
+    
     res.json({ 
       success: true, 
       count: enrichedBills.length,
@@ -122,6 +169,11 @@ const getBills = async (req, res) => {
       page: safePage,
       pages: Math.max(1, Math.ceil(total / safeLimit)),
       limit: safeLimit,
+      monthlyTotals: {
+        totalRevenue,
+        totalPending: totalPendingAll,
+        totalCollected
+      },
       bills: enrichedBills 
     });
   } catch (error) {
