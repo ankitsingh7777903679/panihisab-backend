@@ -51,7 +51,8 @@ const getBills = async (req, res) => {
     
     const bills = await Bill.find(filter)
       .populate('customerId', 'name mobile address pricePerCan openingBalance previousPaid')
-      .sort({ year: -1, month: -1 })
+      // Keep sort deterministic for pagination to avoid duplicate/missing docs across pages.
+      .sort({ year: -1, month: -1, _id: -1 })
       .skip(skip)
       .limit(safeLimit);
 
