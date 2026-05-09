@@ -7,16 +7,93 @@ const SystemSettings = require('../models/SystemSettings');
 const getAdminStats = async (req, res) => {
   try {
     const now = new Date();
-    const [totalVendors, activeVendors, totalCustomers, totalDeliveries, allBills] = await Promise.all([
+    
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(now.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      last7Days.push(d);
+    }
+    const sevenDaysAgo = last7Days[0];
+
+    const [totalVendors, activeVendors, totalCustomers, totalDeliveries, allBills, recentDeliveries] = await Promise.all([
       User.countDocuments({ role: 'vendor' }),
       User.countDocuments({ role: 'vendor', isActive: true }),
       Customer.countDocuments({ isActive: true }),
       Delivery.countDocuments(),
       Bill.find(),
+      Delivery.aggregate([
+        { $match: { date: { $gte: sevenDaysAgo } } },
+        { 
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$date" } },
+            count: { $sum: 1 }
+          }
+        }
+      ])
     ]);
+
     const totalRevenue = allBills.filter(b => b.status === 'paid').reduce((sum, b) => sum + b.totalAmount, 0);
     const pendingBills = allBills.filter(b => b.status === 'unpaid').length;
-    res.json({ success: true, stats: { totalVendors, activeVendors, totalCustomers, totalDeliveries, totalRevenue, pendingBills } });
+    
+    const deliveriesLast7Days = last7Days.map(date => {
+      const dateStr = date.toISOString().split('T')[0];
+      const match = recentDeliveries.find(r => r._id === dateStr);
+      return { date: date.toISOString(), count: match ? match.count : 0 };
+    });
+
+    const monthsMap = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const revenueByMonth = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date();
+      d.setMonth(now.getMonth() - i);
+      const m = d.getMonth() + 1; // 1-12
+      const y = d.getFullYear();
+      
+      const monthBills = allBills.filter(b => b.month === m && b.year === y && b.status === 'paid');
+      const rev = monthBills.reduce((sum, b) => sum + b.totalAmount, 0);
+      
+      revenueByMonth.push({ month: monthsMap[d.getMonth()], revenue: rev });
+    }
+
+    const charts = { revenueByMonth, deliveriesLast7Days };
+
+    // Generate real trends for Sparklines (last 7 days/months)
+    const allVendorsList = await User.find({ role: 'vendor' }).select('createdAt');
+    const allCustomersList = await Customer.find({ isActive: true }).select('createdAt');
+    const unpaidBillsList = allBills.filter(b => b.status === 'unpaid');
+
+    const vendorsTrend = last7Days.map(date => {
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      return allVendorsList.filter(v => v.createdAt < nextDay).length;
+    });
+
+    const customersTrend = last7Days.map(date => {
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      return allCustomersList.filter(c => c.createdAt < nextDay).length;
+    });
+
+    const unpaidBillsTrend = last7Days.map(date => {
+      const nextDay = new Date(date);
+      nextDay.setDate(nextDay.getDate() + 1);
+      return unpaidBillsList.filter(b => b.createdAt < nextDay).length;
+    });
+
+    const deliveriesTrend = deliveriesLast7Days.map(d => d.count);
+    const revenueTrend = revenueByMonth.map(r => r.revenue);
+
+    const trends = {
+      vendors: vendorsTrend,
+      customers: customersTrend,
+      deliveries: deliveriesTrend,
+      revenue: revenueTrend,
+      unpaidBills: unpaidBillsTrend
+    };
+
+    res.json({ success: true, stats: { totalVendors, activeVendors, totalCustomers, totalDeliveries, totalRevenue, pendingBills }, charts, trends });
   } catch (error) {
     console.error('❌ GetAdminStats error:', error.message);
     res.status(500).json({ success: false, message: 'Failed to fetch admin stats.' });
