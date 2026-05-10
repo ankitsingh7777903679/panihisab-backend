@@ -1,11 +1,27 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const SystemSettings = require('./SystemSettings');
+const { validateIndianPhone, normalizePhone } = require('../utils/validators');
 
 const UserSchema = new mongoose.Schema(
   {
     name:         { type: String, required: true, trim: true },
-    mobile:       { type: String, required: true, unique: true, trim: true },
+    mobile:       { 
+      type: String, 
+      required: true, 
+      unique: true, 
+      trim: true,
+      validate: {
+        validator: function(value) {
+          const result = validateIndianPhone(value);
+          return result.isValid;
+        },
+        message: function(props) {
+          const result = validateIndianPhone(props.value);
+          return result.message;
+        }
+      }
+    },
     email:        { type: String, trim: true, lowercase: true },
     password:     { type: String, required: true, minlength: 6 },
     businessName: { type: String, default: '', trim: true },
@@ -37,9 +53,14 @@ const UserSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Auto-set trial dates ONLY if system is already in 'active' mode
-// Otherwise, keep dates null (unlimited free access until admin activates)
+// Normalize mobile number before validation and save
 UserSchema.pre('validate', async function () {
+  if (this.isModified('mobile') && this.mobile) {
+    this.mobile = normalizePhone(this.mobile);
+  }
+  
+  // Auto-set trial dates ONLY if system is already in 'active' mode
+  // Otherwise, keep dates null (unlimited free access until admin activates)
   // Check system settings
   let systemActive = false;
   try {

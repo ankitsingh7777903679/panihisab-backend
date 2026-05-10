@@ -1,4 +1,5 @@
 const Customer = require('../models/Customer');
+const { validateIndianPhone } = require('../utils/validators');
 
 const getCustomers = async (req, res) => {
   try {
@@ -59,16 +60,19 @@ const addCustomer = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Name, mobile, and price are required.' });
     }
     
-    // Normalize mobile: strip spaces, dashes, etc.
-    const normalizedMobile = mobile.replace(/\D/g, '').slice(-10);
+    // Validate mobile number
+    const mobileValidation = validateIndianPhone(mobile);
+    if (!mobileValidation.isValid) {
+      return res.status(400).json({ success: false, message: mobileValidation.message });
+    }
     
     // Check if vendor already has an active customer with this normalized mobile
-    const existingCustomer = await Customer.findOne({ vendorId: req.user.id, mobile: normalizedMobile, isActive: true });
+    const existingCustomer = await Customer.findOne({ vendorId: req.user.id, mobile: mobileValidation.normalized, isActive: true });
     if (existingCustomer) {
       return res.status(400).json({ success: false, message: 'A customer with this mobile number already exists in your list.' });
     }
 
-    const customer = await Customer.create({ vendorId: req.user.id, name, mobile: normalizedMobile, address: address || '', pricePerCan });
+    const customer = await Customer.create({ vendorId: req.user.id, name, mobile: mobileValidation.normalized, address: address || '', pricePerCan });
     res.status(201).json({ success: true, customer });
   } catch (error) {
     console.error('❌ AddCustomer error:', error.message);
@@ -91,12 +95,17 @@ const updateCustomer = async (req, res) => {
   try {
     const { mobile } = req.body;
     
-    // If mobile is being updated, verify it doesn't clash with another active customer
+    // If mobile is being updated, validate it and check for conflicts
     if (req.body.mobile) {
-      req.body.mobile = req.body.mobile.replace(/\D/g, '').slice(-10);
+      const mobileValidation = validateIndianPhone(req.body.mobile);
+      if (!mobileValidation.isValid) {
+        return res.status(400).json({ success: false, message: mobileValidation.message });
+      }
+      
+      req.body.mobile = mobileValidation.normalized;
       const existingCustomer = await Customer.findOne({ 
         vendorId: req.user.id, 
-        mobile: req.body.mobile, 
+        mobile: mobileValidation.normalized, 
         isActive: true,
         _id: { $ne: req.params.id } // exclude self
       });

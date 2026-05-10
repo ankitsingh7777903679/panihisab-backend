@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { validateIndianPhone } = require('../utils/validators');
 
 const generateToken = (id, role) =>
   jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -35,11 +36,18 @@ const register = async (req, res) => {
     if (!name || !mobile || !password) {
       return res.status(400).json({ success: false, message: 'Name, mobile, and password are required.' });
     }
-    const exists = await User.findOne({ mobile });
+    
+    // Validate mobile number
+    const mobileValidation = validateIndianPhone(mobile);
+    if (!mobileValidation.isValid) {
+      return res.status(400).json({ success: false, message: mobileValidation.message });
+    }
+    
+    const exists = await User.findOne({ mobile: mobileValidation.normalized });
     if (exists) {
       return res.status(400).json({ success: false, message: 'Mobile number already registered.' });
     }
-    const user = await User.create({ name, mobile, password, businessName: businessName || '' });
+    const user = await User.create({ name, mobile: mobileValidation.normalized, password, businessName: businessName || '' });
     res.status(201).json({
       success: true,
       token: generateToken(user._id, user.role),
